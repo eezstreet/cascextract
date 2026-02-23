@@ -18,6 +18,7 @@
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "advapi32.lib")
 
 /* -----------------------------------------------------------------------
  * Control IDs
@@ -59,6 +60,9 @@
 #define TOOLBAR_H     (ROW2_Y + BTN_HEIGHT + BTN_MARGIN)
 #define STATUSBAR_H   22
 #define STATUS_MARGIN  4
+
+/* Registry key for persistent settings */
+#define REG_KEY_PATH "SOFTWARE\\eezstreet\\cascextract"
 
 /* 1 MB read buffer for extraction */
 #define EXTRACT_CHUNK (1024 * 1024)
@@ -104,6 +108,39 @@ static HWND    g_hwndMain   = NULL;
 static HWND    g_hwndSearch = NULL;
 static HFONT   g_hListFont  = NULL;
 
+static char    g_szLastStoragePath[MAX_PATH];
+static char    g_szLastExtractPath[MAX_PATH];
+
+/* -----------------------------------------------------------------------
+ * Registry helpers
+ * ----------------------------------------------------------------------- */
+
+static void RegLoadString(const char *name, char *out, DWORD size)
+{
+    HKEY  hKey;
+    DWORD dwType = REG_SZ;
+    DWORD dwSize = size;
+
+    out[0] = '\0';
+    if (RegOpenKeyExA(HKEY_CURRENT_USER, REG_KEY_PATH, 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+    {
+        RegQueryValueExA(hKey, name, NULL, &dwType, (LPBYTE)out, &dwSize);
+        RegCloseKey(hKey);
+    }
+}
+
+static void RegSaveString(const char *name, const char *value)
+{
+    HKEY hKey;
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, REG_KEY_PATH, 0, NULL,
+                        REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS)
+    {
+        RegSetValueExA(hKey, name, 0, REG_SZ,
+                       (const BYTE *)value, (DWORD)(strlen(value) + 1));
+        RegCloseKey(hKey);
+    }
+}
+
 /* -----------------------------------------------------------------------
  * Helpers
  * ----------------------------------------------------------------------- */
@@ -118,7 +155,15 @@ static void SetStatus(const char *fmt, ...)
     SetWindowTextA(g_hwndStatus, buf);
 }
 
-static BOOL BrowseForFolder(HWND hwnd, const char *title, char *outPath)
+static int CALLBACK BrowseCallbackProc(HWND hwnd, UINT uMsg, LPARAM lParam, LPARAM lpData)
+{
+    (void)lParam;
+    if (uMsg == BFFM_INITIALIZED && lpData)
+        SendMessageA(hwnd, BFFM_SETSELECTION, TRUE, lpData);
+    return 0;
+}
+
+static BOOL BrowseForFolder(HWND hwnd, const char *title, char *outPath, const char *initialPath)
 {
     BROWSEINFOA  bi;
     LPITEMIDLIST pidl;
@@ -127,6 +172,12 @@ static BOOL BrowseForFolder(HWND hwnd, const char *title, char *outPath)
     bi.hwndOwner = hwnd;
     bi.lpszTitle = title;
     bi.ulFlags   = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+
+    if (initialPath && initialPath[0])
+    {
+        bi.lpfn  = BrowseCallbackProc;
+        bi.lParam = (LPARAM)initialPath;
+    }
 
     pidl = SHBrowseForFolderA(&bi);
     if (pidl)
@@ -416,8 +467,11 @@ static void DoOpenStorage(HWND hwnd)
     HANDLE       hThread;
     char         szPath[MAX_PATH];
 
-    if (!BrowseForFolder(hwnd, "Select CASC Storage Folder (containing .build.info)", szPath))
+    if (!BrowseForFolder(hwnd, "Select CASC Storage Folder (containing .build.info)", szPath, g_szLastStoragePath))
         return;
+
+    strncpy_s(g_szLastStoragePath, sizeof(g_szLastStoragePath), szPath, _TRUNCATE);
+    RegSaveString("LastStoragePath", szPath);
 
     CloseCurrentStorage();
 
@@ -540,7 +594,10 @@ static void DoExtractSelected(HWND hwnd)
         return;
     }
 
-    if (!BrowseForFolder(hwnd, "Select Output Folder", szOutDir)) return;
+    if (!BrowseForFolder(hwnd, "Select Output Folder", szOutDir, g_szLastExtractPath)) return;
+
+    strncpy_s(g_szLastExtractPath, sizeof(g_szLastExtractPath), szOutDir, _TRUNCATE);
+    RegSaveString("LastExtractPath", szOutDir);
 
     pSel = (int *)malloc(nSel * sizeof(int));
     if (!pSel) return;
@@ -577,7 +634,10 @@ static void DoExtractAll(HWND hwnd)
     nTotal = (int)SendMessage(g_hwndList, LB_GETCOUNT, 0, 0);
     if (nTotal <= 0) return;
 
-    if (!BrowseForFolder(hwnd, "Select Output Folder", szOutDir)) return;
+    if (!BrowseForFolder(hwnd, "Select Output Folder", szOutDir, g_szLastExtractPath)) return;
+
+    strncpy_s(g_szLastExtractPath, sizeof(g_szLastExtractPath), szOutDir, _TRUNCATE);
+    RegSaveString("LastExtractPath", szOutDir);
 
     for (i = 0; i < nTotal; i++)
     {
@@ -792,7 +852,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         case IDC_BTN_ABOUT:
             MessageBoxA(hwnd,
                 "CASC Storage Extractor\n"
-                "Version 1.00\n\n"
+                "Version 1.01\n\n"
                 "Author: eezstreet",
                 "About", MB_OK | MB_ICONINFORMATION);
             break;
@@ -840,6 +900,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
     CoInitialize(NULL);
     InitCommonControls();
+
+    RegLoadString("LastStoragePath", g_szLastStoragePath, sizeof(g_szLastStoragePath));
+    RegLoadString("LastExtractPath", g_szLastExtractPath, sizeof(g_szLastExtractPath));
 
     memset(&wc, 0, sizeof(wc));
     wc.style         = CS_HREDRAW | CS_VREDRAW;
