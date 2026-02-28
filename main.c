@@ -518,6 +518,11 @@ static BOOL ExtractCascFile(const char *szFileName, const char *szOutDir)
 
     /* Normalise separators and replace Windows-illegal characters */
     strncpy_s(szFixed, sizeof(szFixed), szFileName, _TRUNCATE);
+
+	char* colon = strchr(szFixed, ':');
+	if (colon && *(colon + 1))
+		memmove(szFixed, colon + 1, strlen(colon + 1) + 1);
+
     for (p = szFixed; *p; p++)
     {
         if (*p == '/')
