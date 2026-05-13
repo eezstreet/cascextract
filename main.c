@@ -370,6 +370,7 @@ static DWORD WINAPI OpenStorageThread(LPVOID lpParam)
     args.dwLocaleMask        = CASC_LOCALE_ALL;
     args.PfnProgressCallback = CascProgressCb;
     args.PtrProgressParam    = (void *)pParams->hwndMain;
+	args.dwFlags = CASC_FEATURE_ALLOW_DOWNLOAD;
 
     if (!CascOpenStorageEx(pParams->szPath, &args, FALSE, &hStorage))
     {
